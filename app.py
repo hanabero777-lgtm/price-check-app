@@ -149,8 +149,69 @@ def get_top_candidates(ai_name, prod_master, top_n=3):
     scores.sort(reverse=True, key=lambda x: x[0])
     return [item[1] for item in scores[:top_n] if item[0] > 0.15]
 
+# ★追加：履歴を自動でスライド判定して保存する専用関数
+def save_or_update_price(store_name, prod_id, prod_name, price_notax, price_tax, user_name):
+    sh = connect_to_spreadsheet()
+    price_sheet = sh.worksheet("店舗別価格表")
+    today = datetime.now().strftime("%Y/%m/%d")
+
+    # M列までヘッダーがあるか確認・自動追加
+    headers = price_sheet.row_values(1)
+    required_headers = [
+        "販売店名", "商品ID", "商品名", "現行売価(税抜)", "現行売価(税込)", "更新日", "担当者",
+        "過去売価1(税抜)", "過去売価1(税込)", "過去日1", "過去売価2(税抜)", "過去売価2(税込)", "過去日2"
+    ]
+    if len(headers) < len(required_headers):
+        for i, h in enumerate(required_headers):
+            if i >= len(headers):
+                price_sheet.update_cell(1, i+1, h)
+
+    all_values = price_sheet.get_all_values()
+    found_idx = -1
+    
+    # 同じ店舗・同じ商品がないか上から探す
+    for i, row in enumerate(all_values):
+        if i == 0: continue
+        if len(row) >= 2 and row[0] == store_name and row[1] == prod_id:
+            found_idx = i + 1  # Googleスプレッドシートは1行目から始まるため +1
+            break
+
+    in_notax = str(price_notax)
+    in_tax = str(price_tax)
+
+    if found_idx != -1:
+        # 【既存あり】
+        row = all_values[found_idx - 1]
+        padded_row = row + [""] * (13 - len(row)) # 空白列を補填
+        
+        curr_notax = str(padded_row[3])
+        curr_tax = str(padded_row[4])
+        curr_date = padded_row[5]
+        hist1_notax = padded_row[7]
+        hist1_tax = padded_row[8]
+        hist1_date = padded_row[9]
+
+        if curr_notax == in_notax and curr_tax == in_tax:
+            # 価格が同じ場合：F列(更新日)とG列(担当者)だけを最新に更新
+            price_sheet.update(f'F{found_idx}:G{found_idx}', [[today, user_name]])
+        else:
+            # 価格が違う場合：履歴を右にスライドして更新
+            new_values = [
+                in_notax, in_tax, today, user_name,            # 新しい現行 (D〜G)
+                curr_notax, curr_tax, curr_date,               # 過去1へスライド (H〜J)
+                hist1_notax, hist1_tax, hist1_date             # 過去2へスライド (K〜M)
+            ]
+            price_sheet.update(f'D{found_idx}:M{found_idx}', [new_values])
+    else:
+        # 【完全新規】一番下の行に追加
+        new_row = [
+            store_name, prod_id, prod_name, in_notax, in_tax, today, user_name,
+            "", "", "", "", "", ""
+        ]
+        price_sheet.append_row(new_row)
+
 # ==========================================
-# 4. 画面ごとの関数（★二段階認証・PINコード対応）
+# 4. 画面ごとの関数
 # ==========================================
 def authenticate_user(username, password):
     try:
@@ -159,7 +220,6 @@ def authenticate_user(username, password):
         users = user_sheet.get_all_records()
         for user in users:
             if str(user.get("ユーザーID", "")) == username and str(user.get("パスワード", "")) == password:
-                # ★シートからPINコードを取得（設定されていない場合は空文字）
                 pin = str(user.get("PINコード", "")) 
                 return True, user.get("氏名", "不明"), pin
         return False, "", ""
@@ -170,7 +230,6 @@ def authenticate_user(username, password):
 def login_screen():
     st.title("🔐 システムログイン")
     
-    # 認証のステップ管理（1: IDパスワード、2: PINコード）
     if 'auth_stage' not in st.session_state:
         st.session_state['auth_stage'] = 1
         
@@ -205,10 +264,9 @@ def login_screen():
                 if not st.session_state['expected_pin']:
                     st.error("スプレッドシートにPINコードが設定されていません。管理者に連絡して設定を完了してください。")
                 elif entered_pin == st.session_state['expected_pin']:
-                    # PINコード一致で最終ログイン成功
                     st.session_state['logged_in'] = True
                     st.session_state['user_name'] = st.session_state['temp_name']
-                    st.session_state['auth_stage'] = 1 # ステータスリセット
+                    st.session_state['auth_stage'] = 1 
                     st.rerun()
                 else:
                     st.error("PINコードが間違っています。")
@@ -343,14 +401,6 @@ def price_check_app():
             if st.button("💾 全て確認してスプレッドシートに登録", type="primary", use_container_width=True):
                 with st.spinner("保存中..."):
                     try:
-                        sh = connect_to_spreadsheet()
-                        price_sheet = sh.worksheet("店舗別価格表")
-                        today = datetime.now().strftime("%Y/%m/%d")
-                        
-                        headers = price_sheet.row_values(1)
-                        if "担当者" not in headers:
-                            price_sheet.update_cell(1, len(headers) + 1, "担当者")
-                            
                         for i, item in enumerate(st.session_state['scanned_data']):
                             state_key = f"selected_master_{i}"
                             final_price = st.session_state[f"price_{i}"]
@@ -365,11 +415,17 @@ def price_check_app():
                             price_notax = final_price if final_tax == '税別' else ""
                             price_tax = final_price if final_tax == '税込' else ""
                             
-                            price_sheet.append_row([
-                                st.session_state.selected_store_val, prod_id, prod_name, 
-                                price_notax, price_tax, today, st.session_state.get('user_name', '不明')
-                            ])
-                        st.success("✅ スプレッドシートへの登録が完了しました！")
+                            # ★新しいスマート保存関数を使用
+                            save_or_update_price(
+                                st.session_state.selected_store_val, 
+                                prod_id, 
+                                prod_name, 
+                                price_notax, 
+                                price_tax, 
+                                st.session_state.get('user_name', '不明')
+                            )
+
+                        st.success("✅ スプレッドシートへの登録・更新が完了しました！")
                         del st.session_state['scanned_data']
                         st.rerun()
                     except Exception as e:
@@ -459,21 +515,18 @@ def price_check_app():
                                     else:
                                         with st.spinner("保存中..."):
                                             try:
-                                                sh = connect_to_spreadsheet()
-                                                price_sheet = sh.worksheet("店舗別価格表")
-                                                today = datetime.now().strftime("%Y/%m/%d")
+                                                price_notax = man_price if man_tax == '税別' else ""
+                                                price_tax = man_price if man_tax == '税込' else ""
                                                 
-                                                headers = price_sheet.row_values(1)
-                                                if "担当者" not in headers:
-                                                    price_sheet.update_cell(1, len(headers) + 1, "担当者")
-                                                    
-                                                price_sheet.append_row([
+                                                # ★新しいスマート保存関数を使用
+                                                save_or_update_price(
                                                     st.session_state.selected_store_val,
-                                                    target_prod['商品ID'], target_prod.get('商品名', ''),
-                                                    man_price if man_tax == '税別' else "",
-                                                    man_price if man_tax == '税込' else "",
-                                                    today, st.session_state.get('user_name', '不明')
-                                                ])
+                                                    target_prod['商品ID'], 
+                                                    target_prod.get('商品名', ''),
+                                                    price_notax, 
+                                                    price_tax,
+                                                    st.session_state.get('user_name', '不明')
+                                                )
                                                 st.success("✅ 登録しました！")
                                             except Exception as e:
                                                 st.error(f"保存失敗: {e}")

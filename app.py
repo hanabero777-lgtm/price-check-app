@@ -98,9 +98,6 @@ def load_category_master():
     except gspread.exceptions.WorksheetNotFound:
         cat_sheet = sh.add_worksheet(title="カテゴリーマスター", rows="100", cols="4")
         cat_sheet.append_row(["カテゴリー名", "規格1ラベル", "規格2ラベル", "規格3ラベル"])
-        cat_sheet.append_row(["ＢＯＸティッシュ", "組数", "パック入り数", "紙サイズ"])
-        cat_sheet.append_row(["再生紙ロール", "長さ", "パック入り数", "ロール幅"])
-        
     cat_data = cat_sheet.get_all_records()
     cat_dict = {}
     for row in cat_data:
@@ -128,7 +125,6 @@ def load_product_master():
         all_values = prod_sheet.get_all_values()
         if len(all_values) <= 1:
             return {}
-            
         headers = all_values[0]
         prod_dict = {}
         for i, row in enumerate(all_values[1:], start=2):
@@ -154,45 +150,68 @@ def get_top_candidates(ai_name, prod_master, top_n=3):
     return [item[1] for item in scores[:top_n] if item[0] > 0.15]
 
 # ==========================================
-# 4. 画面ごとの関数（★ログイン・権限管理を強化）
+# 4. 画面ごとの関数（★二段階認証・PINコード対応）
 # ==========================================
 def authenticate_user(username, password):
     try:
         sh = connect_to_spreadsheet()
-        try:
-            user_sheet = sh.worksheet("ユーザー管理")
-        except gspread.exceptions.WorksheetNotFound:
-            # 初回起動時に自動でシートを作成する
-            user_sheet = sh.add_worksheet(title="ユーザー管理", rows="50", cols="4")
-            user_sheet.append_row(["ユーザーID", "パスワード", "氏名", "権限"])
-            user_sheet.append_row(["admin", "1234", "管理者", "admin"])
-            user_sheet.append_row(["user01", "0000", "テスト担当者", "user"])
-            
+        user_sheet = sh.worksheet("ユーザー管理")
         users = user_sheet.get_all_records()
         for user in users:
             if str(user.get("ユーザーID", "")) == username and str(user.get("パスワード", "")) == password:
-                return True, user.get("氏名", "不明")
-        return False, ""
+                # ★シートからPINコードを取得（設定されていない場合は空文字）
+                pin = str(user.get("PINコード", "")) 
+                return True, user.get("氏名", "不明"), pin
+        return False, "", ""
     except Exception as e:
         st.error(f"認証エラーが発生しました: {e}")
-        return False, ""
+        return False, "", ""
 
 def login_screen():
     st.title("🔐 システムログイン")
-    st.write("支給されたIDとパスワードを入力してください。")
     
-    username = st.text_input("ユーザーID", placeholder="例: admin")
-    password = st.text_input("パスワード", type="password", placeholder="例: 1234")
-    
-    if st.button("ログイン", type="primary", use_container_width=True):
-        with st.spinner("認証中..."):
-            is_auth, name = authenticate_user(username, password)
-            if is_auth:
-                st.session_state['logged_in'] = True
-                st.session_state['user_name'] = name
+    # 認証のステップ管理（1: IDパスワード、2: PINコード）
+    if 'auth_stage' not in st.session_state:
+        st.session_state['auth_stage'] = 1
+        
+    if st.session_state['auth_stage'] == 1:
+        st.write("支給されたIDとパスワードを入力してください。")
+        username = st.text_input("ユーザーID")
+        password = st.text_input("パスワード", type="password")
+        
+        if st.button("次へ", type="primary", use_container_width=True):
+            with st.spinner("認証中..."):
+                is_auth, name, expected_pin = authenticate_user(username, password)
+                if is_auth:
+                    st.session_state['temp_name'] = name
+                    st.session_state['expected_pin'] = expected_pin
+                    st.session_state['auth_stage'] = 2
+                    st.rerun()
+                else:
+                    st.error("ユーザーIDかパスワードが間違っています。")
+                    
+    elif st.session_state['auth_stage'] == 2:
+        st.write(f"👤 **{st.session_state['temp_name']}** さん")
+        st.write("二段階認証：4桁のPINコードを入力してください。")
+        entered_pin = st.text_input("PINコード", type="password", placeholder="****")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("戻る", use_container_width=True):
+                st.session_state['auth_stage'] = 1
                 st.rerun()
-            else:
-                st.error("ユーザーIDかパスワードが間違っています。")
+        with col2:
+            if st.button("認証する", type="primary", use_container_width=True):
+                if not st.session_state['expected_pin']:
+                    st.error("スプレッドシートにPINコードが設定されていません。管理者に連絡して設定を完了してください。")
+                elif entered_pin == st.session_state['expected_pin']:
+                    # PINコード一致で最終ログイン成功
+                    st.session_state['logged_in'] = True
+                    st.session_state['user_name'] = st.session_state['temp_name']
+                    st.session_state['auth_stage'] = 1 # ステータスリセット
+                    st.rerun()
+                else:
+                    st.error("PINコードが間違っています。")
 
 # ---------------------------------------------
 # 画面①：店舗巡回（価格チェック）
@@ -328,7 +347,6 @@ def price_check_app():
                         price_sheet = sh.worksheet("店舗別価格表")
                         today = datetime.now().strftime("%Y/%m/%d")
                         
-                        # ヘッダー行に担当者列がない場合は追加（念のため）
                         headers = price_sheet.row_values(1)
                         if "担当者" not in headers:
                             price_sheet.update_cell(1, len(headers) + 1, "担当者")
@@ -347,7 +365,6 @@ def price_check_app():
                             price_notax = final_price if final_tax == '税別' else ""
                             price_tax = final_price if final_tax == '税込' else ""
                             
-                            # ★ここで「誰が登録したか」を一緒に追加します
                             price_sheet.append_row([
                                 st.session_state.selected_store_val, prod_id, prod_name, 
                                 price_notax, price_tax, today, st.session_state.get('user_name', '不明')
@@ -696,13 +713,14 @@ if 'logged_in' not in st.session_state:
 
 if st.session_state['logged_in']:
     st.sidebar.title("メニュー")
-    # ★ログイン中のユーザー名を表示します
     st.sidebar.write(f"👤 **{st.session_state.get('user_name', 'ゲスト')}** さん")
     
     menu_selection = st.sidebar.radio("機能を選択", ["① 売価チェック", "② 商品マスター管理"])
     st.sidebar.markdown("---")
     if st.sidebar.button("ログアウト"):
         st.session_state['logged_in'] = False
+        if 'auth_stage' in st.session_state:
+            st.session_state['auth_stage'] = 1
         st.rerun()
 
     if menu_selection == "① 売価チェック":

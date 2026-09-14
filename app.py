@@ -149,13 +149,11 @@ def get_top_candidates(ai_name, prod_master, top_n=3):
     scores.sort(reverse=True, key=lambda x: x[0])
     return [item[1] for item in scores[:top_n] if item[0] > 0.15]
 
-# ★追加：履歴を自動でスライド判定して保存する専用関数
 def save_or_update_price(store_name, prod_id, prod_name, price_notax, price_tax, user_name):
     sh = connect_to_spreadsheet()
     price_sheet = sh.worksheet("店舗別価格表")
     today = datetime.now().strftime("%Y/%m/%d")
 
-    # M列までヘッダーがあるか確認・自動追加
     headers = price_sheet.row_values(1)
     required_headers = [
         "販売店名", "商品ID", "商品名", "現行売価(税抜)", "現行売価(税込)", "更新日", "担当者",
@@ -169,20 +167,18 @@ def save_or_update_price(store_name, prod_id, prod_name, price_notax, price_tax,
     all_values = price_sheet.get_all_values()
     found_idx = -1
     
-    # 同じ店舗・同じ商品がないか上から探す
     for i, row in enumerate(all_values):
         if i == 0: continue
         if len(row) >= 2 and row[0] == store_name and row[1] == prod_id:
-            found_idx = i + 1  # Googleスプレッドシートは1行目から始まるため +1
+            found_idx = i + 1
             break
 
     in_notax = str(price_notax)
     in_tax = str(price_tax)
 
     if found_idx != -1:
-        # 【既存あり】
         row = all_values[found_idx - 1]
-        padded_row = row + [""] * (13 - len(row)) # 空白列を補填
+        padded_row = row + [""] * (13 - len(row))
         
         curr_notax = str(padded_row[3])
         curr_tax = str(padded_row[4])
@@ -192,18 +188,15 @@ def save_or_update_price(store_name, prod_id, prod_name, price_notax, price_tax,
         hist1_date = padded_row[9]
 
         if curr_notax == in_notax and curr_tax == in_tax:
-            # 価格が同じ場合：F列(更新日)とG列(担当者)だけを最新に更新
             price_sheet.update(f'F{found_idx}:G{found_idx}', [[today, user_name]])
         else:
-            # 価格が違う場合：履歴を右にスライドして更新
             new_values = [
-                in_notax, in_tax, today, user_name,            # 新しい現行 (D〜G)
-                curr_notax, curr_tax, curr_date,               # 過去1へスライド (H〜J)
-                hist1_notax, hist1_tax, hist1_date             # 過去2へスライド (K〜M)
+                in_notax, in_tax, today, user_name,            
+                curr_notax, curr_tax, curr_date,               
+                hist1_notax, hist1_tax, hist1_date             
             ]
             price_sheet.update(f'D{found_idx}:M{found_idx}', [new_values])
     else:
-        # 【完全新規】一番下の行に追加
         new_row = [
             store_name, prod_id, prod_name, in_notax, in_tax, today, user_name,
             "", "", "", "", "", ""
@@ -262,7 +255,7 @@ def login_screen():
         with col2:
             if st.button("認証する", type="primary", use_container_width=True):
                 if not st.session_state['expected_pin']:
-                    st.error("スプレッドシートにPINコードが設定されていません。管理者に連絡して設定を完了してください。")
+                    st.error("スプレッドシートにPINコードが設定されていません。")
                 elif entered_pin == st.session_state['expected_pin']:
                     st.session_state['logged_in'] = True
                     st.session_state['user_name'] = st.session_state['temp_name']
@@ -415,7 +408,6 @@ def price_check_app():
                             price_notax = final_price if final_tax == '税別' else ""
                             price_tax = final_price if final_tax == '税込' else ""
                             
-                            # ★新しいスマート保存関数を使用
                             save_or_update_price(
                                 st.session_state.selected_store_val, 
                                 prod_id, 
@@ -518,7 +510,6 @@ def price_check_app():
                                                 price_notax = man_price if man_tax == '税別' else ""
                                                 price_tax = man_price if man_tax == '税込' else ""
                                                 
-                                                # ★新しいスマート保存関数を使用
                                                 save_or_update_price(
                                                     st.session_state.selected_store_val,
                                                     target_prod['商品ID'], 
@@ -601,7 +592,7 @@ def price_check_app():
             st.error(f"通信エラー: {e}")
 
 # ---------------------------------------------
-# 画面②：商品マスター管理
+# 画面②：商品マスター管理 (★CSV一括登録機能を追加)
 # ---------------------------------------------
 def master_manage_app():
     st.title("📦 商品マスター管理")
@@ -623,7 +614,7 @@ def master_manage_app():
                 rd['_row_idx'] = i
                 prod_data.append(rd)
                 
-    tab1, tab2 = st.tabs(["✨ 新規登録", "✏️ マスターの変更"])
+    tab1, tab2, tab3 = st.tabs(["✨ 新規登録", "✏️ マスターの変更", "📁 CSV一括登録"])
     
     with tab1:
         st.write("### 新しい商品をマスターに登録します")
@@ -683,80 +674,237 @@ def master_manage_app():
         st.write("### 登録済みマスターの情報を編集します")
         if not prod_data:
             st.warning("登録されている商品がありません。")
-            return
-            
-        st.write("▼ 検索条件で絞り込む")
-        f_cat_list = ["すべて"] + list(set([str(r.get('カテゴリー', '')) for r in prod_data if r.get('カテゴリー')]))
-        f_maker_list = ["すべて"] + list(set([str(r.get('メーカー名', '')) for r in prod_data if r.get('メーカー名')]))
-        col_s1, col_s2, col_s3 = st.columns(3)
-        with col_s1: search_cat = st.selectbox("カテゴリー検索", f_cat_list)
-        with col_s2: search_maker = st.selectbox("メーカー検索", f_maker_list)
-        with col_s3: search_word = st.text_input("商品名（キーワード）")
-        
-        filtered_data = []
-        for d in prod_data:
-            if (search_cat == "すべて" or str(d.get('カテゴリー')) == search_cat) and \
-               (search_maker == "すべて" or str(d.get('メーカー名')) == search_maker) and \
-               (search_word in str(d.get('商品名', ''))):
-                filtered_data.append(d)
-                
-        prod_dict = {f"[{row['商品ID']}] {row.get('商品名', '')}": row for row in filtered_data}
-        if not prod_dict:
-            st.warning("条件に一致する商品がありません。")
         else:
-            selected_prod_key = st.selectbox("編集する商品を選択してください", ["選択してください"] + list(prod_dict.keys()))
-            if selected_prod_key != "選択してください":
-                target_prod = prod_dict[selected_prod_key]
-                prod_id = target_prod['商品ID']
-                row_idx = target_prod['_row_idx']
-                st.markdown("---")
-                
-                try: cat_idx = cat_list.index(target_prod.get('カテゴリー'))
-                except ValueError: cat_idx = 0
-                edit_cat = st.selectbox("カテゴリーの変更", cat_list, index=cat_idx, key=f"edit_cat_{prod_id}")
-                labels = CAT_MASTER.get(edit_cat, ["規格1", "規格2", "規格3"])
-                
-                spec1 = target_prod.get('規格1', target_prod.get('規格１', ''))
-                spec2 = target_prod.get('規格2', target_prod.get('規格２', ''))
-                spec3 = target_prod.get('規格3', target_prod.get('規格３', ''))
-                
-                with st.form("edit_product_form"):
-                    st.write(f"**商品ID: {prod_id} の編集**")
-                    edit_name = st.text_input("商品名", value=target_prod.get('商品名', ''))
-                    edit_maker = st.text_input("メーカー名", value=target_prod.get('メーカー名', ''))
-                    col_e1, col_e2, col_e3 = st.columns(3)
-                    with col_e1: edit_spec1 = st.text_input(labels[0], value=spec1)
-                    with col_e2: edit_spec2 = st.text_input(labels[1], value=spec2)
-                    with col_e3: edit_spec3 = st.text_input(labels[2], value=spec3)
-                    edit_origin = st.text_input("原産国", value=target_prod.get('原産国', ''))
+            st.write("▼ 検索条件で絞り込む")
+            f_cat_list = ["すべて"] + list(set([str(r.get('カテゴリー', '')) for r in prod_data if r.get('カテゴリー')]))
+            f_maker_list = ["すべて"] + list(set([str(r.get('メーカー名', '')) for r in prod_data if r.get('メーカー名')]))
+            col_s1, col_s2, col_s3 = st.columns(3)
+            with col_s1: search_cat = st.selectbox("カテゴリー検索", f_cat_list)
+            with col_s2: search_maker = st.selectbox("メーカー検索", f_maker_list)
+            with col_s3: search_word = st.text_input("商品名（キーワード）")
+            
+            filtered_data = []
+            for d in prod_data:
+                if (search_cat == "すべて" or str(d.get('カテゴリー')) == search_cat) and \
+                   (search_maker == "すべて" or str(d.get('メーカー名')) == search_maker) and \
+                   (search_word in str(d.get('商品名', ''))):
+                    filtered_data.append(d)
                     
-                    current_img_path = target_prod.get('商品画像URL', '')
-                    st.write("▼ 画像の更新")
-                    if current_img_path and (current_img_path.startswith("http") or os.path.exists(current_img_path)):
-                        st.image(current_img_path, width=200, caption="現在登録されている画像")
-                    else:
-                        st.info("※現在登録されている画像はありません")
+            prod_dict = {f"[{row['商品ID']}] {row.get('商品名', '')}": row for row in filtered_data}
+            if not prod_dict:
+                st.warning("条件に一致する商品がありません。")
+            else:
+                selected_prod_key = st.selectbox("編集する商品を選択してください", ["選択してください"] + list(prod_dict.keys()))
+                if selected_prod_key != "選択してください":
+                    target_prod = prod_dict[selected_prod_key]
+                    prod_id = target_prod['商品ID']
+                    row_idx = target_prod['_row_idx']
+                    st.markdown("---")
+                    
+                    try: cat_idx = cat_list.index(target_prod.get('カテゴリー'))
+                    except ValueError: cat_idx = 0
+                    edit_cat = st.selectbox("カテゴリーの変更", cat_list, index=cat_idx, key=f"edit_cat_{prod_id}")
+                    labels = CAT_MASTER.get(edit_cat, ["規格1", "規格2", "規格3"])
+                    
+                    spec1 = target_prod.get('規格1', target_prod.get('規格１', ''))
+                    spec2 = target_prod.get('規格2', target_prod.get('規格２', ''))
+                    spec3 = target_prod.get('規格3', target_prod.get('規格３', ''))
+                    
+                    with st.form("edit_product_form"):
+                        st.write(f"**商品ID: {prod_id} の編集**")
+                        edit_name = st.text_input("商品名", value=target_prod.get('商品名', ''))
+                        edit_maker = st.text_input("メーカー名", value=target_prod.get('メーカー名', ''))
+                        col_e1, col_e2, col_e3 = st.columns(3)
+                        with col_e1: edit_spec1 = st.text_input(labels[0], value=spec1)
+                        with col_e2: edit_spec2 = st.text_input(labels[1], value=spec2)
+                        with col_e3: edit_spec3 = st.text_input(labels[2], value=spec3)
+                        edit_origin = st.text_input("原産国", value=target_prod.get('原産国', ''))
                         
-                    st.info("💡 撮影する場合は「12M（標準）」以下のモードをご使用ください。")
-                    edit_img_file = st.file_uploader("新しい画像で上書き", type=["jpg", "jpeg", "png"])
+                        current_img_path = target_prod.get('商品画像URL', '')
+                        st.write("▼ 画像の更新")
+                        if current_img_path and (current_img_path.startswith("http") or os.path.exists(current_img_path)):
+                            st.image(current_img_path, width=200, caption="現在登録されている画像")
+                        else:
+                            st.info("※現在登録されている画像はありません")
+                            
+                        st.info("💡 撮影する場合は「12M（標準）」以下のモードをご使用ください。")
+                        edit_img_file = st.file_uploader("新しい画像で上書き", type=["jpg", "jpeg", "png"])
+                        
+                        if st.form_submit_button("🔄 変更を保存する"):
+                            with st.spinner("クラウドに変更を保存中..."):
+                                final_img_path = current_img_path
+                                if edit_img_file:
+                                    optimized_img = optimize_image_in_memory(edit_img_file)
+                                    final_img_path = save_compressed_image(optimized_img, prod_id)
+                                    
+                                try:
+                                    prod_sheet.update(
+                                        range_name=f'A{row_idx}:I{row_idx}', 
+                                        values=[[prod_id, edit_cat, edit_name, edit_maker, edit_spec1, edit_spec2, edit_spec3, edit_origin, final_img_path]]
+                                    )
+                                except Exception as e:
+                                    st.error(f"更新エラー: {e}")
+                                    
+                                st.success("商品の情報を更新しました！")
+                                st.rerun()
+
+    with tab3:
+        st.write("### CSVファイルから商品を一括登録します")
+        st.info("エクセル等で作成した「商品マスター」のCSVファイルをアップロードしてください。")
+        uploaded_csv = st.file_uploader("CSVファイルをアップロード", type=["csv"])
+        
+        if uploaded_csv is not None:
+            try:
+                # 文字化け対策（UTF-8で失敗したらShift-JISで読み込む）
+                try:
+                    df = pd.read_csv(uploaded_csv, encoding='utf-8')
+                except Exception:
+                    uploaded_csv.seek(0)
+                    df = pd.read_csv(uploaded_csv, encoding='shift_jis')
                     
-                    if st.form_submit_button("🔄 変更を保存する"):
-                        with st.spinner("クラウドに変更を保存中..."):
-                            final_img_path = current_img_path
-                            if edit_img_file:
-                                optimized_img = optimize_image_in_memory(edit_img_file)
-                                final_img_path = save_compressed_image(optimized_img, prod_id)
-                                
+                if not df.empty:
+                    st.write("▼ 読み込みプレビュー (最初の5件)")
+                    st.dataframe(df.head())
+                    
+                    if st.button("🚀 このデータで一括登録を実行", type="primary"):
+                        with st.spinner("スプレッドシートに登録中..."):
                             try:
-                                prod_sheet.update(
-                                    range_name=f'A{row_idx}:I{row_idx}', 
-                                    values=[[prod_id, edit_cat, edit_name, edit_maker, edit_spec1, edit_spec2, edit_spec3, edit_origin, final_img_path]]
-                                )
+                                df = df.fillna("")
+                                values = df.values.tolist()
+                                prod_sheet.append_rows(values)
+                                st.success(f"✅ {len(values)}件の商品を一括登録しました！")
+                                st.rerun()
                             except Exception as e:
-                                st.error(f"更新エラー: {e}")
-                                
-                            st.success("商品の情報を更新しました！")
-                            st.rerun()
+                                st.error(f"登録中にエラーが発生しました: {e}")
+            except Exception as e:
+                st.error(f"ファイルの読み込みに失敗しました: {e}")
+
+
+# ---------------------------------------------
+# 画面③：商談向け分析ダッシュボード (★完全新規追加)
+# ---------------------------------------------
+def dashboard_app():
+    st.title("📊 商談向け分析ダッシュボード")
+    
+    sh = connect_to_spreadsheet()
+    try:
+        price_sheet = sh.worksheet("店舗別価格表")
+        price_data = price_sheet.get_all_records()
+        price_df = pd.DataFrame(price_data)
+    except Exception:
+        price_df = pd.DataFrame()
+        
+    PROD_MASTER = load_product_master()
+    prod_data = list(PROD_MASTER.values())
+    prod_df = pd.DataFrame(prod_data)
+    
+    if price_df.empty:
+        st.warning("価格データがまだ登録されていません。まずは「売価チェック」から登録を行ってください。")
+        return
+        
+    # 価格データに、商品マスターのカテゴリーと画像を合体させる
+    if not prod_df.empty and '商品ID' in price_df.columns:
+        merged_df = pd.merge(price_df, prod_df[['商品ID', 'カテゴリー', '商品画像URL', 'メーカー名']], on='商品ID', how='left')
+    else:
+        merged_df = price_df
+        
+    tab1, tab2, tab3 = st.tabs(["🏆 カテゴリー別 最安値ランキング", "🏪 販売店の売価一覧(画像付)", "⚖️ 販売店の価格比較"])
+    
+    with tab1:
+        st.write("### 🥇 エリア内 最安値ランキング")
+        st.write("商談時の「他店の価格動向」の提示に活用できます。")
+        if 'カテゴリー' in merged_df.columns:
+            categories = [c for c in merged_df['カテゴリー'].unique() if pd.notna(c) and c != ""]
+            if categories:
+                sel_cat = st.selectbox("カテゴリーを選択してランキングを表示", categories, key="dash_cat")
+                cat_df = merged_df[merged_df['カテゴリー'] == sel_cat].copy()
+                
+                if not cat_df.empty:
+                    cat_df['現行売価(税込)'] = pd.to_numeric(cat_df['現行売価(税込)'], errors='coerce')
+                    ranked_df = cat_df.sort_values(by='現行売価(税込)', ascending=True).dropna(subset=['現行売価(税込)'])
+                    
+                    st.dataframe(
+                        ranked_df[['販売店名', '商品名', 'メーカー名', '現行売価(税抜)', '現行売価(税込)', '更新日']],
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.info("このカテゴリーには価格データがありません。")
+            else:
+                st.info("カテゴリー情報が見つかりません。")
+        else:
+            st.info("商品マスターにカテゴリー情報がありません。")
+
+    with tab2:
+        st.write("### 🏪 販売店ごとの売価一覧")
+        st.write("店舗ごとの棚の状況や、登録済みの画像をまとめて確認できます。")
+        if '販売店名' in merged_df.columns:
+            stores = [s for s in merged_df['販売店名'].unique() if pd.notna(s) and s != ""]
+            sel_store = st.selectbox("販売店を選択", stores, key="dash_store")
+            store_df = merged_df[merged_df['販売店名'] == sel_store]
+            
+            for _, row in store_df.iterrows():
+                with st.container(border=True):
+                    col1, col2 = st.columns([1, 3])
+                    with col1:
+                        img_url = row.get('商品画像URL', '')
+                        if pd.notna(img_url) and str(img_url).startswith('http'):
+                            st.image(img_url, use_container_width=True)
+                        else:
+                            st.info("📷 画像なし")
+                    with col2:
+                        st.write(f"#### {row.get('商品名', '不明')}")
+                        st.write(f"🏢 **メーカー:** {row.get('メーカー名', '不明')} | 🏷️ **カテゴリー:** {row.get('カテゴリー', '不明')}")
+                        st.write(f"💰 **現行売価:** {row.get('現行売価(税抜)', '')}円 (税抜) / {row.get('現行売価(税込)', '')}円 (税込)")
+                        st.caption(f"📅 更新日: {row.get('更新日', '')} | 👤 担当者: {row.get('担当者', '')}")
+                        
+                        hist1 = row.get('過去売価1(税込)', '')
+                        hist1_date = row.get('過去日1', '')
+                        if pd.notna(hist1) and str(hist1) != "":
+                            diff = ""
+                            try:
+                                curr_val = int(row.get('現行売価(税込)', 0))
+                                prev_val = int(hist1)
+                                diff_val = curr_val - prev_val
+                                if diff_val > 0: diff = f" (🔺 値上げ: +{diff_val}円)"
+                                elif diff_val < 0: diff = f" (🔻 値下げ: {diff_val}円)"
+                                else: diff = " (ー 変動なし)"
+                            except: pass
+                            st.markdown(f"**📉 前回価格:** {hist1}円 ({hist1_date}) {diff}")
+
+    with tab3:
+        st.write("### ⚖️ 販売店のガチンコ価格比較")
+        st.write("競合店同士の売価差額を瞬時にあぶり出します。")
+        if '販売店名' in merged_df.columns:
+            stores = [s for s in merged_df['販売店名'].unique() if pd.notna(s) and s != ""]
+            col_a, col_b = st.columns(2)
+            with col_a: store_A = st.selectbox("比較元 (販売店A)", stores, key="comp_A")
+            with col_b: store_B = st.selectbox("比較先 (販売店B)", stores, key="comp_B")
+            
+            if store_A and store_B:
+                if store_A == store_B:
+                    st.warning("異なる販売店を選択してください。")
+                else:
+                    df_A = merged_df[merged_df['販売店名'] == store_A][['商品ID', '商品名', '現行売価(税込)']].rename(columns={'現行売価(税込)': f'{store_A} (税込)'})
+                    df_B = merged_df[merged_df['販売店名'] == store_B][['商品ID', '現行売価(税込)']].rename(columns={'現行売価(税込)': f'{store_B} (税込)'})
+                    
+                    if not df_A.empty and not df_B.empty:
+                        comp_df = pd.merge(df_A, df_B, on='商品ID', how='inner')
+                        if comp_df.empty:
+                            st.info("両方の店舗に共通して登録されている商品がありませんでした。")
+                        else:
+                            comp_df[f'{store_A} (税込)'] = pd.to_numeric(comp_df[f'{store_A} (税込)'], errors='coerce')
+                            comp_df[f'{store_B} (税込)'] = pd.to_numeric(comp_df[f'{store_B} (税込)'], errors='coerce')
+                            comp_df['価格差 (A - B)'] = comp_df[f'{store_A} (税込)'] - comp_df[f'{store_B} (税込)']
+                            
+                            st.success(f"**共通アイテムの比較 ({len(comp_df)}件の合致がありました)**")
+                            st.dataframe(
+                                comp_df[['商品名', f'{store_A} (税込)', f'{store_B} (税込)', '価格差 (A - B)']],
+                                hide_index=True,
+                                use_container_width=True
+                            )
+                    else:
+                        st.info("比較するためのデータが不足しています。")
 
 # ==========================================
 # 5. メインコントローラー
@@ -768,7 +916,8 @@ if st.session_state['logged_in']:
     st.sidebar.title("メニュー")
     st.sidebar.write(f"👤 **{st.session_state.get('user_name', 'ゲスト')}** さん")
     
-    menu_selection = st.sidebar.radio("機能を選択", ["① 売価チェック", "② 商品マスター管理"])
+    # ★メニューに「分析ダッシュボード」を追加
+    menu_selection = st.sidebar.radio("機能を選択", ["① 売価チェック", "② 商品マスター管理", "③ 分析ダッシュボード"])
     st.sidebar.markdown("---")
     if st.sidebar.button("ログアウト"):
         st.session_state['logged_in'] = False
@@ -780,5 +929,7 @@ if st.session_state['logged_in']:
         price_check_app()
     elif menu_selection == "② 商品マスター管理":
         master_manage_app()
+    elif menu_selection == "③ 分析ダッシュボード":
+        dashboard_app()
 else:
     login_screen()

@@ -775,7 +775,7 @@ def master_manage_app():
                 st.error(f"ファイルの読み込みに失敗しました: {e}")
 
 # ---------------------------------------------
-# 画面③：商談向け分析ダッシュボード (★修正・大幅強化版)
+# 画面③：商談向け分析ダッシュボード (★完全リニューアル版)
 # ---------------------------------------------
 def dashboard_app():
     st.title("📊 商談向け分析ダッシュボード")
@@ -783,11 +783,12 @@ def dashboard_app():
     sh = connect_to_spreadsheet()
     try:
         price_sheet = sh.worksheet("店舗別価格表")
-        # エラーを防ぐため、安全なデータ取得方法に変更
         all_values = price_sheet.get_all_values()
         if len(all_values) > 1:
             headers = all_values[0]
             price_df = pd.DataFrame(all_values[1:], columns=headers)
+            # ★重複した列名を自動的に削除してエラーを完全回避
+            price_df = price_df.loc[:, ~price_df.columns.duplicated()]
         else:
             price_df = pd.DataFrame()
     except Exception as e:
@@ -800,56 +801,88 @@ def dashboard_app():
     else:
         prod_data = list(PROD_MASTER.values())
         prod_df = pd.DataFrame(prod_data)
+        # ★商品マスター側も念のため重複列を削除
+        prod_df = prod_df.loc[:, ~prod_df.columns.duplicated()]
     
     if price_df.empty:
         st.warning("価格データがまだ登録されていないか、正しく読み込めませんでした。")
         return
         
-    # 【重要修正】税抜・税込の文字を数字に変換。空欄は無視する。
+    # 税抜・税込の金額を数字として認識させる（空欄は無視）
     for col in ['現行売価(税抜)', '現行売価(税込)']:
         if col in price_df.columns:
             price_df[col] = pd.to_numeric(price_df[col], errors='coerce')
             
-    # 【重要修正】「比較用価格」を自動生成（税抜を優先し、なければ税込を使う）
-    price_df['比較用価格'] = price_df['現行売価(税抜)'].fillna(price_df['現行売価(税込)'])
+    # ★比較用の価格を自動生成（税抜があれば税抜、なければ税込を採用）
+    price_df['比較用価格'] = price_df['現行売価(税抜)'].fillna(price_df.get('現行売価(税込)'))
     
     if not prod_df.empty and '商品ID' in price_df.columns:
-        merged_df = pd.merge(price_df, prod_df[['商品ID', 'カテゴリー', '商品画像URL', 'メーカー名']], on='商品ID', how='left')
+        # 画像URLとスペック（規格）も一緒に合体させる
+        merge_cols = ['商品ID', 'カテゴリー', 'メーカー名', '商品画像URL', '規格1', '規格2', '規格3']
+        merge_cols = [c for c in merge_cols if c in prod_df.columns]
+        merged_df = pd.merge(price_df, prod_df[merge_cols], on='商品ID', how='left')
     else:
         merged_df = price_df
         merged_df['カテゴリー'] = "不明"
         merged_df['メーカー名'] = "不明"
         
-    # 商談に特化した4つのタブ構成
-    tab1, tab2, tab3, tab4 = st.tabs(["🛍️ 商品別の店舗比較", "🥇 カテゴリー別 最安値", "📊 エリア価格一覧(ﾏﾄﾘｸｽ)", "⚖️ 店舗間 ガチンコ比較"])
+    # タブ構成を商談用に最適化
+    tab1, tab2, tab3, tab4 = st.tabs(["🛍️ 商品・店舗 価格一覧", "🥇 カテゴリー別 最安値", "📊 エリア価格マトリクス", "⚖️ 店舗間 ガチンコ比較"])
     
     with tab1:
-        st.write("### 🛍️ 商品別の店舗比較（バイヤー提案用）")
-        st.write("特定の商品が、各店舗でいくらで売られているかを棒グラフで比較します。")
+        st.write("### 🛍️ 商品・店舗 価格一覧（画像・スペック付）")
+        st.write("どの店舗でどの商品がいくらで売っているか、画像やスペックと合わせて確認できます。")
         
         categories = [c for c in merged_df['カテゴリー'].unique() if pd.notna(c) and str(c).strip() != ""]
         if categories:
-            sel_cat = st.selectbox("カテゴリーを選択", categories, key="t1_cat")
-            cat_df = merged_df[merged_df['カテゴリー'] == sel_cat]
-            products = [p for p in cat_df['商品名'].unique() if pd.notna(p) and str(p).strip() != ""]
+            sel_cat = st.selectbox("表示するカテゴリーを選択", ["すべて表示"] + categories, key="t1_cat")
             
-            if products:
-                sel_prod = st.selectbox("比較する商品を選択", products, key="t1_prod")
-                prod_comp_df = cat_df[cat_df['商品名'] == sel_prod].dropna(subset=['比較用価格'])
+            if sel_cat == "すべて表示":
+                disp_df = merged_df.copy()
+            else:
+                disp_df = merged_df[merged_df['カテゴリー'] == sel_cat].copy()
+            
+            # 商品名と価格の順に見やすく並べ替え
+            disp_df = disp_df.dropna(subset=['比較用価格']).sort_values(['商品名', '比較用価格'])
+            
+            if not disp_df.empty:
+                # 表に表示する列を厳選して整理
+                cols_to_show = []
+                col_config = {}
                 
-                if not prod_comp_df.empty:
-                    prod_comp_df = prod_comp_df.sort_values('比較用価格')
-                    # 棒グラフを表示
-                    st.bar_chart(prod_comp_df.set_index('販売店名')['比較用価格'])
+                # 画像URLの列があれば、Streamlitに「これは画像として表示してね」と設定する
+                if '商品画像URL' in disp_df.columns:
+                    cols_to_show.append('商品画像URL')
+                    col_config['商品画像URL'] = st.column_config.ImageColumn("パッケージ画像")
+                
+                cols_to_show.extend(['販売店名', 'メーカー名', '商品名'])
+                
+                for spec in ['規格1', '規格2', '規格3']:
+                    if spec in disp_df.columns:
+                        cols_to_show.append(spec)
+                        
+                if '現行売価(税抜)' in disp_df.columns:
+                    cols_to_show.append('現行売価(税抜)')
+                    col_config['現行売価(税抜)'] = st.column_config.NumberColumn("税抜", format="%d円")
                     
-                    st.dataframe(
-                        prod_comp_df[['販売店名', '現行売価(税抜)', '現行売価(税込)', '更新日', '担当者']],
-                        hide_index=True, use_container_width=True
-                    )
-                else:
-                    st.info("この商品の価格データはありません。")
+                if '現行売価(税込)' in disp_df.columns:
+                    cols_to_show.append('現行売価(税込)')
+                    col_config['現行売価(税込)'] = st.column_config.NumberColumn("税込", format="%d円")
+                    
+                if '更新日' in disp_df.columns:
+                    cols_to_show.append('更新日')
+                
+                # 美しい表として出力！
+                st.dataframe(
+                    disp_df[cols_to_show],
+                    column_config=col_config,
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.info("このカテゴリーの価格データはありません。")
         else:
-            st.info("商品データがありません。")
+            st.info("カテゴリーデータがありません。")
 
     with tab2:
         st.write("### 🥇 カテゴリー別 最安値ランキング")
@@ -869,7 +902,6 @@ def dashboard_app():
     with tab3:
         st.write("### 📊 エリア価格一覧表（マトリクス）")
         st.write("店舗（横）× 商品（縦）で、エリア全体の価格相場を一目で把握できます。")
-        
         if not merged_df.empty:
             try:
                 pivot_df = merged_df.dropna(subset=['比較用価格']).pivot_table(

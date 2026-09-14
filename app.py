@@ -318,7 +318,6 @@ def price_check_app():
             
         st.info(f"🏢 **対象店舗:** {st.session_state.selected_store_val}")
         st.write("### 📸 画像から商品を読み取る")
-        st.info("💡 **【お願い】スマホで撮影する場合は、カメラの画素数設定を「12M（標準）」以下にして撮影してください。**")
         
         uploaded_file = st.file_uploader("棚の画像を撮影 / 選択", type=["jpg", "jpeg", "png"])
         if uploaded_file is not None:
@@ -569,7 +568,6 @@ def price_check_app():
                     with col2: new_spec2 = st.text_input(labels[1])
                     with col3: new_spec3 = st.text_input(labels[2])
                     new_origin = st.text_input("原産国")
-                    st.info("💡 撮影する場合は「12M（標準）」以下のモードをご使用ください。")
                     new_img_file = st.file_uploader("商品画像をアップロード", type=["jpg", "jpeg", "png"])
                     
                     if st.form_submit_button("💾 マスターに登録して検索画面に戻る", type="primary", use_container_width=True):
@@ -592,7 +590,7 @@ def price_check_app():
             st.error(f"通信エラー: {e}")
 
 # ---------------------------------------------
-# 画面②：商品マスター管理 (★CSV一括登録機能を追加)
+# 画面②：商品マスター管理
 # ---------------------------------------------
 def master_manage_app():
     st.title("📦 商品マスター管理")
@@ -651,7 +649,6 @@ def master_manage_app():
             with col2: new_spec2 = st.text_input(labels[1])
             with col3: new_spec3 = st.text_input(labels[2])
             new_origin = st.text_input("原産国")
-            st.info("💡 撮影する場合は「12M（標準）」以下のモードをご使用ください。")
             new_img_file = st.file_uploader("商品画像をアップロード", type=["jpg", "jpeg", "png"])
             
             if st.form_submit_button("💾 この内容で新規登録"):
@@ -727,7 +724,6 @@ def master_manage_app():
                         else:
                             st.info("※現在登録されている画像はありません")
                             
-                        st.info("💡 撮影する場合は「12M（標準）」以下のモードをご使用ください。")
                         edit_img_file = st.file_uploader("新しい画像で上書き", type=["jpg", "jpeg", "png"])
                         
                         if st.form_submit_button("🔄 変更を保存する"):
@@ -749,13 +745,12 @@ def master_manage_app():
                                 st.rerun()
 
     with tab3:
-        st.write("### CSVファイルから商品を一括登録します")
+        st.write("### 📁 CSVファイルから商品を一括登録します")
         st.info("エクセル等で作成した「商品マスター」のCSVファイルをアップロードしてください。")
         uploaded_csv = st.file_uploader("CSVファイルをアップロード", type=["csv"])
         
         if uploaded_csv is not None:
             try:
-                # 文字化け対策（UTF-8で失敗したらShift-JISで読み込む）
                 try:
                     df = pd.read_csv(uploaded_csv, encoding='utf-8')
                 except Exception:
@@ -779,9 +774,8 @@ def master_manage_app():
             except Exception as e:
                 st.error(f"ファイルの読み込みに失敗しました: {e}")
 
-
 # ---------------------------------------------
-# 画面③：商談向け分析ダッシュボード (★完全新規追加)
+# 画面③：商談向け分析ダッシュボード (★修正・大幅強化版)
 # ---------------------------------------------
 def dashboard_app():
     st.title("📊 商談向け分析ダッシュボード")
@@ -789,122 +783,126 @@ def dashboard_app():
     sh = connect_to_spreadsheet()
     try:
         price_sheet = sh.worksheet("店舗別価格表")
-        price_data = price_sheet.get_all_records()
-        price_df = pd.DataFrame(price_data)
-    except Exception:
+        # エラーを防ぐため、安全なデータ取得方法に変更
+        all_values = price_sheet.get_all_values()
+        if len(all_values) > 1:
+            headers = all_values[0]
+            price_df = pd.DataFrame(all_values[1:], columns=headers)
+        else:
+            price_df = pd.DataFrame()
+    except Exception as e:
+        st.error(f"データ取得エラー: {e}")
         price_df = pd.DataFrame()
         
     PROD_MASTER = load_product_master()
-    prod_data = list(PROD_MASTER.values())
-    prod_df = pd.DataFrame(prod_data)
+    if not PROD_MASTER:
+        prod_df = pd.DataFrame()
+    else:
+        prod_data = list(PROD_MASTER.values())
+        prod_df = pd.DataFrame(prod_data)
     
     if price_df.empty:
-        st.warning("価格データがまだ登録されていません。まずは「売価チェック」から登録を行ってください。")
+        st.warning("価格データがまだ登録されていないか、正しく読み込めませんでした。")
         return
         
-    # 価格データに、商品マスターのカテゴリーと画像を合体させる
+    # 【重要修正】税抜・税込の文字を数字に変換。空欄は無視する。
+    for col in ['現行売価(税抜)', '現行売価(税込)']:
+        if col in price_df.columns:
+            price_df[col] = pd.to_numeric(price_df[col], errors='coerce')
+            
+    # 【重要修正】「比較用価格」を自動生成（税抜を優先し、なければ税込を使う）
+    price_df['比較用価格'] = price_df['現行売価(税抜)'].fillna(price_df['現行売価(税込)'])
+    
     if not prod_df.empty and '商品ID' in price_df.columns:
         merged_df = pd.merge(price_df, prod_df[['商品ID', 'カテゴリー', '商品画像URL', 'メーカー名']], on='商品ID', how='left')
     else:
         merged_df = price_df
+        merged_df['カテゴリー'] = "不明"
+        merged_df['メーカー名'] = "不明"
         
-    tab1, tab2, tab3 = st.tabs(["🏆 カテゴリー別 最安値ランキング", "🏪 販売店の売価一覧(画像付)", "⚖️ 販売店の価格比較"])
+    # 商談に特化した4つのタブ構成
+    tab1, tab2, tab3, tab4 = st.tabs(["🛍️ 商品別の店舗比較", "🥇 カテゴリー別 最安値", "📊 エリア価格一覧(ﾏﾄﾘｸｽ)", "⚖️ 店舗間 ガチンコ比較"])
     
     with tab1:
-        st.write("### 🥇 エリア内 最安値ランキング")
-        st.write("商談時の「他店の価格動向」の提示に活用できます。")
-        if 'カテゴリー' in merged_df.columns:
-            categories = [c for c in merged_df['カテゴリー'].unique() if pd.notna(c) and c != ""]
-            if categories:
-                sel_cat = st.selectbox("カテゴリーを選択してランキングを表示", categories, key="dash_cat")
-                cat_df = merged_df[merged_df['カテゴリー'] == sel_cat].copy()
+        st.write("### 🛍️ 商品別の店舗比較（バイヤー提案用）")
+        st.write("特定の商品が、各店舗でいくらで売られているかを棒グラフで比較します。")
+        
+        categories = [c for c in merged_df['カテゴリー'].unique() if pd.notna(c) and str(c).strip() != ""]
+        if categories:
+            sel_cat = st.selectbox("カテゴリーを選択", categories, key="t1_cat")
+            cat_df = merged_df[merged_df['カテゴリー'] == sel_cat]
+            products = [p for p in cat_df['商品名'].unique() if pd.notna(p) and str(p).strip() != ""]
+            
+            if products:
+                sel_prod = st.selectbox("比較する商品を選択", products, key="t1_prod")
+                prod_comp_df = cat_df[cat_df['商品名'] == sel_prod].dropna(subset=['比較用価格'])
                 
-                if not cat_df.empty:
-                    cat_df['現行売価(税込)'] = pd.to_numeric(cat_df['現行売価(税込)'], errors='coerce')
-                    ranked_df = cat_df.sort_values(by='現行売価(税込)', ascending=True).dropna(subset=['現行売価(税込)'])
+                if not prod_comp_df.empty:
+                    prod_comp_df = prod_comp_df.sort_values('比較用価格')
+                    # 棒グラフを表示
+                    st.bar_chart(prod_comp_df.set_index('販売店名')['比較用価格'])
                     
                     st.dataframe(
-                        ranked_df[['販売店名', '商品名', 'メーカー名', '現行売価(税抜)', '現行売価(税込)', '更新日']],
-                        hide_index=True,
-                        use_container_width=True
+                        prod_comp_df[['販売店名', '現行売価(税抜)', '現行売価(税込)', '更新日', '担当者']],
+                        hide_index=True, use_container_width=True
                     )
                 else:
-                    st.info("このカテゴリーには価格データがありません。")
-            else:
-                st.info("カテゴリー情報が見つかりません。")
+                    st.info("この商品の価格データはありません。")
         else:
-            st.info("商品マスターにカテゴリー情報がありません。")
+            st.info("商品データがありません。")
 
     with tab2:
-        st.write("### 🏪 販売店ごとの売価一覧")
-        st.write("店舗ごとの棚の状況や、登録済みの画像をまとめて確認できます。")
-        if '販売店名' in merged_df.columns:
-            stores = [s for s in merged_df['販売店名'].unique() if pd.notna(s) and s != ""]
-            sel_store = st.selectbox("販売店を選択", stores, key="dash_store")
-            store_df = merged_df[merged_df['販売店名'] == sel_store]
+        st.write("### 🥇 カテゴリー別 最安値ランキング")
+        if categories:
+            sel_cat2 = st.selectbox("カテゴリーを選択してランキングを表示", categories, key="t2_cat")
+            cat_df2 = merged_df[merged_df['カテゴリー'] == sel_cat2].copy()
             
-            for _, row in store_df.iterrows():
-                with st.container(border=True):
-                    col1, col2 = st.columns([1, 3])
-                    with col1:
-                        img_url = row.get('商品画像URL', '')
-                        if pd.notna(img_url) and str(img_url).startswith('http'):
-                            st.image(img_url, use_container_width=True)
-                        else:
-                            st.info("📷 画像なし")
-                    with col2:
-                        st.write(f"#### {row.get('商品名', '不明')}")
-                        st.write(f"🏢 **メーカー:** {row.get('メーカー名', '不明')} | 🏷️ **カテゴリー:** {row.get('カテゴリー', '不明')}")
-                        st.write(f"💰 **現行売価:** {row.get('現行売価(税抜)', '')}円 (税抜) / {row.get('現行売価(税込)', '')}円 (税込)")
-                        st.caption(f"📅 更新日: {row.get('更新日', '')} | 👤 担当者: {row.get('担当者', '')}")
-                        
-                        hist1 = row.get('過去売価1(税込)', '')
-                        hist1_date = row.get('過去日1', '')
-                        if pd.notna(hist1) and str(hist1) != "":
-                            diff = ""
-                            try:
-                                curr_val = int(row.get('現行売価(税込)', 0))
-                                prev_val = int(hist1)
-                                diff_val = curr_val - prev_val
-                                if diff_val > 0: diff = f" (🔺 値上げ: +{diff_val}円)"
-                                elif diff_val < 0: diff = f" (🔻 値下げ: {diff_val}円)"
-                                else: diff = " (ー 変動なし)"
-                            except: pass
-                            st.markdown(f"**📉 前回価格:** {hist1}円 ({hist1_date}) {diff}")
+            ranked_df = cat_df2.dropna(subset=['比較用価格']).sort_values(by='比較用価格', ascending=True)
+            if not ranked_df.empty:
+                st.dataframe(
+                    ranked_df[['販売店名', '商品名', 'メーカー名', '現行売価(税抜)', '現行売価(税込)', '更新日']],
+                    hide_index=True, use_container_width=True
+                )
+            else:
+                st.info("ランキングデータがありません。")
 
     with tab3:
-        st.write("### ⚖️ 販売店のガチンコ価格比較")
-        st.write("競合店同士の売価差額を瞬時にあぶり出します。")
-        if '販売店名' in merged_df.columns:
-            stores = [s for s in merged_df['販売店名'].unique() if pd.notna(s) and s != ""]
+        st.write("### 📊 エリア価格一覧表（マトリクス）")
+        st.write("店舗（横）× 商品（縦）で、エリア全体の価格相場を一目で把握できます。")
+        
+        if not merged_df.empty:
+            try:
+                pivot_df = merged_df.dropna(subset=['比較用価格']).pivot_table(
+                    index=['メーカー名', '商品名'],
+                    columns='販売店名',
+                    values='比較用価格',
+                    aggfunc='min'
+                ).reset_index()
+                st.dataframe(pivot_df, hide_index=True, use_container_width=True)
+            except Exception:
+                st.info("マトリクスを生成するためのデータが不足しています。")
+
+    with tab4:
+        st.write("### ⚖️ 店舗間 ガチンコ比較")
+        stores = [s for s in merged_df['販売店名'].unique() if pd.notna(s) and str(s).strip() != ""]
+        if len(stores) >= 2:
             col_a, col_b = st.columns(2)
             with col_a: store_A = st.selectbox("比較元 (販売店A)", stores, key="comp_A")
             with col_b: store_B = st.selectbox("比較先 (販売店B)", stores, key="comp_B")
             
-            if store_A and store_B:
-                if store_A == store_B:
-                    st.warning("異なる販売店を選択してください。")
+            if store_A and store_B and store_A != store_B:
+                df_A = merged_df[merged_df['販売店名'] == store_A][['商品ID', '商品名', '比較用価格']].rename(columns={'比較用価格': f'{store_A}価格'})
+                df_B = merged_df[merged_df['販売店名'] == store_B][['商品ID', '比較用価格']].rename(columns={'比較用価格': f'{store_B}価格'})
+                
+                comp_df = pd.merge(df_A, df_B, on='商品ID', how='inner')
+                if not comp_df.empty:
+                    comp_df['価格差 (A - B)'] = comp_df[f'{store_A}価格'] - comp_df[f'{store_B}価格']
+                    st.success(f"**共通アイテムの比較 ({len(comp_df)}件の合致)**")
+                    st.dataframe(comp_df[['商品名', f'{store_A}価格', f'{store_B}価格', '価格差 (A - B)']], hide_index=True, use_container_width=True)
                 else:
-                    df_A = merged_df[merged_df['販売店名'] == store_A][['商品ID', '商品名', '現行売価(税込)']].rename(columns={'現行売価(税込)': f'{store_A} (税込)'})
-                    df_B = merged_df[merged_df['販売店名'] == store_B][['商品ID', '現行売価(税込)']].rename(columns={'現行売価(税込)': f'{store_B} (税込)'})
-                    
-                    if not df_A.empty and not df_B.empty:
-                        comp_df = pd.merge(df_A, df_B, on='商品ID', how='inner')
-                        if comp_df.empty:
-                            st.info("両方の店舗に共通して登録されている商品がありませんでした。")
-                        else:
-                            comp_df[f'{store_A} (税込)'] = pd.to_numeric(comp_df[f'{store_A} (税込)'], errors='coerce')
-                            comp_df[f'{store_B} (税込)'] = pd.to_numeric(comp_df[f'{store_B} (税込)'], errors='coerce')
-                            comp_df['価格差 (A - B)'] = comp_df[f'{store_A} (税込)'] - comp_df[f'{store_B} (税込)']
-                            
-                            st.success(f"**共通アイテムの比較 ({len(comp_df)}件の合致がありました)**")
-                            st.dataframe(
-                                comp_df[['商品名', f'{store_A} (税込)', f'{store_B} (税込)', '価格差 (A - B)']],
-                                hide_index=True,
-                                use_container_width=True
-                            )
-                    else:
-                        st.info("比較するためのデータが不足しています。")
+                    st.info("両方の店舗に共通して登録されている商品がありません。")
+        else:
+            st.info("比較するには2つ以上の販売店データが必要です。")
 
 # ==========================================
 # 5. メインコントローラー
@@ -916,7 +914,6 @@ if st.session_state['logged_in']:
     st.sidebar.title("メニュー")
     st.sidebar.write(f"👤 **{st.session_state.get('user_name', 'ゲスト')}** さん")
     
-    # ★メニューに「分析ダッシュボード」を追加
     menu_selection = st.sidebar.radio("機能を選択", ["① 売価チェック", "② 商品マスター管理", "③ 分析ダッシュボード"])
     st.sidebar.markdown("---")
     if st.sidebar.button("ログアウト"):

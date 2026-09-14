@@ -775,7 +775,7 @@ def master_manage_app():
                 st.error(f"ファイルの読み込みに失敗しました: {e}")
 
 # ---------------------------------------------
-# 画面③：商談向け分析ダッシュボード (★完全リニューアル版)
+# 画面③：商談向け分析ダッシュボード (★全アイテム・マスター照合版)
 # ---------------------------------------------
 def dashboard_app():
     st.title("📊 商談向け分析ダッシュボード")
@@ -787,7 +787,6 @@ def dashboard_app():
         if len(all_values) > 1:
             headers = all_values[0]
             price_df = pd.DataFrame(all_values[1:], columns=headers)
-            # ★重複した列名を自動的に削除してエラーを完全回避
             price_df = price_df.loc[:, ~price_df.columns.duplicated()]
         else:
             price_df = pd.DataFrame()
@@ -801,23 +800,19 @@ def dashboard_app():
     else:
         prod_data = list(PROD_MASTER.values())
         prod_df = pd.DataFrame(prod_data)
-        # ★商品マスター側も念のため重複列を削除
         prod_df = prod_df.loc[:, ~prod_df.columns.duplicated()]
     
     if price_df.empty:
         st.warning("価格データがまだ登録されていないか、正しく読み込めませんでした。")
         return
         
-    # 税抜・税込の金額を数字として認識させる（空欄は無視）
     for col in ['現行売価(税抜)', '現行売価(税込)']:
         if col in price_df.columns:
             price_df[col] = pd.to_numeric(price_df[col], errors='coerce')
             
-    # ★比較用の価格を自動生成（税抜があれば税抜、なければ税込を採用）
     price_df['比較用価格'] = price_df['現行売価(税抜)'].fillna(price_df.get('現行売価(税込)'))
     
     if not prod_df.empty and '商品ID' in price_df.columns:
-        # 画像URLとスペック（規格）も一緒に合体させる
         merge_cols = ['商品ID', 'カテゴリー', 'メーカー名', '商品画像URL', '規格1', '規格2', '規格3']
         merge_cols = [c for c in merge_cols if c in prod_df.columns]
         merged_df = pd.merge(price_df, prod_df[merge_cols], on='商品ID', how='left')
@@ -826,7 +821,6 @@ def dashboard_app():
         merged_df['カテゴリー'] = "不明"
         merged_df['メーカー名'] = "不明"
         
-    # タブ構成を商談用に最適化
     tab1, tab2, tab3, tab4 = st.tabs(["🛍️ 商品・店舗 価格一覧", "🥇 カテゴリー別 最安値", "📊 エリア価格マトリクス", "⚖️ 店舗間 ガチンコ比較"])
     
     with tab1:
@@ -842,15 +836,12 @@ def dashboard_app():
             else:
                 disp_df = merged_df[merged_df['カテゴリー'] == sel_cat].copy()
             
-            # 商品名と価格の順に見やすく並べ替え
             disp_df = disp_df.dropna(subset=['比較用価格']).sort_values(['商品名', '比較用価格'])
             
             if not disp_df.empty:
-                # 表に表示する列を厳選して整理
                 cols_to_show = []
                 col_config = {}
                 
-                # 画像URLの列があれば、Streamlitに「これは画像として表示してね」と設定する
                 if '商品画像URL' in disp_df.columns:
                     cols_to_show.append('商品画像URL')
                     col_config['商品画像URL'] = st.column_config.ImageColumn("パッケージ画像")
@@ -872,13 +863,7 @@ def dashboard_app():
                 if '更新日' in disp_df.columns:
                     cols_to_show.append('更新日')
                 
-                # 美しい表として出力！
-                st.dataframe(
-                    disp_df[cols_to_show],
-                    column_config=col_config,
-                    hide_index=True,
-                    use_container_width=True
-                )
+                st.dataframe(disp_df[cols_to_show], column_config=col_config, hide_index=True, use_container_width=True)
             else:
                 st.info("このカテゴリーの価格データはありません。")
         else:
@@ -914,25 +899,81 @@ def dashboard_app():
             except Exception:
                 st.info("マトリクスを生成するためのデータが不足しています。")
 
+    # ★ここからが完全リニューアルの「店舗間 ガチンコ比較（全マスター照合）」★
     with tab4:
-        st.write("### ⚖️ 店舗間 ガチンコ比較")
+        st.write("### ⚖️ 店舗間 ガチンコ比較（全アイテム一覧）")
+        st.write("商品マスターに登録されている全商品を基準に、選択した2店舗の品揃えと価格を左右で一覧比較します。")
+        
         stores = [s for s in merged_df['販売店名'].unique() if pd.notna(s) and str(s).strip() != ""]
         if len(stores) >= 2:
+            categories_t4 = [c for c in prod_df['カテゴリー'].unique() if pd.notna(c) and str(c).strip() != ""]
+            sel_cat_t4 = st.selectbox("比較するカテゴリーを選択", ["すべてのカテゴリー"] + categories_t4, key="t4_cat")
+            
             col_a, col_b = st.columns(2)
-            with col_a: store_A = st.selectbox("比較元 (販売店A)", stores, key="comp_A")
-            with col_b: store_B = st.selectbox("比較先 (販売店B)", stores, key="comp_B")
+            with col_a: store_A = st.selectbox("比較元 (店舗A)", stores, key="comp_A")
+            with col_b: store_B = st.selectbox("比較先 (店舗B)", stores, key="comp_B")
             
             if store_A and store_B and store_A != store_B:
-                df_A = merged_df[merged_df['販売店名'] == store_A][['商品ID', '商品名', '比較用価格']].rename(columns={'比較用価格': f'{store_A}価格'})
-                df_B = merged_df[merged_df['販売店名'] == store_B][['商品ID', '比較用価格']].rename(columns={'比較用価格': f'{store_B}価格'})
+                # 1. マスターをベースにする
+                comp_df = prod_df.copy()
                 
-                comp_df = pd.merge(df_A, df_B, on='商品ID', how='inner')
+                # 2. 各店舗の価格データを抽出（重複登録対策として最後のデータを採用）
+                df_A = merged_df[merged_df['販売店名'] == store_A][['商品ID', '比較用価格']].rename(columns={'比較用価格': f'{store_A}の価格'})
+                df_B = merged_df[merged_df['販売店名'] == store_B][['商品ID', '比較用価格']].rename(columns={'比較用価格': f'{store_B}の価格'})
+                df_A = df_A.drop_duplicates(subset=['商品ID'], keep='last')
+                df_B = df_B.drop_duplicates(subset=['商品ID'], keep='last')
+                
+                # 3. マスターに店舗価格を結合（左結合）
+                comp_df = pd.merge(comp_df, df_A, on='商品ID', how='left')
+                comp_df = pd.merge(comp_df, df_B, on='商品ID', how='left')
+                
+                # 4. カテゴリーで絞り込み
+                if sel_cat_t4 != "すべてのカテゴリー":
+                    comp_df = comp_df[comp_df['カテゴリー'] == sel_cat_t4]
+                    
                 if not comp_df.empty:
-                    comp_df['価格差 (A - B)'] = comp_df[f'{store_A}価格'] - comp_df[f'{store_B}価格']
-                    st.success(f"**共通アイテムの比較 ({len(comp_df)}件の合致)**")
-                    st.dataframe(comp_df[['商品名', f'{store_A}価格', f'{store_B}価格', '価格差 (A - B)']], hide_index=True, use_container_width=True)
+                    # 5. 価格差を計算
+                    comp_df['価格差 (A - B)'] = comp_df[f'{store_A}の価格'] - comp_df[f'{store_B}の価格']
+                    
+                    # 6. 並べ替え (メーカー > 商品名)
+                    sort_cols = [c for c in ['メーカー名', '商品名'] if c in comp_df.columns]
+                    comp_df = comp_df.sort_values(sort_cols)
+                    
+                    # 7. 表示カラムの設定
+                    cols_to_show_t4 = []
+                    col_config_t4 = {}
+                    
+                    if '商品画像URL' in comp_df.columns:
+                        cols_to_show_t4.append('商品画像URL')
+                        col_config_t4['商品画像URL'] = st.column_config.ImageColumn("画像")
+                        
+                    if sel_cat_t4 == "すべてのカテゴリー" and 'カテゴリー' in comp_df.columns:
+                        cols_to_show_t4.append('カテゴリー')
+                        
+                    cols_to_show_t4.extend([c for c in ['メーカー名', '商品名', '規格1', '規格2', '規格3'] if c in comp_df.columns])
+                    
+                    cols_to_show_t4.append(f'{store_A}の価格')
+                    col_config_t4[f'{store_A}の価格'] = st.column_config.NumberColumn(f"{store_A}", format="%d円")
+                    
+                    cols_to_show_t4.append(f'{store_B}の価格')
+                    col_config_t4[f'{store_B}の価格'] = st.column_config.NumberColumn(f"{store_B}", format="%d円")
+                    
+                    cols_to_show_t4.append('価格差 (A - B)')
+                    col_config_t4['価格差 (A - B)'] = st.column_config.NumberColumn("差額(A-B)", format="%d円")
+                    
+                    st.success(f"**マスター照合結果: {len(comp_df)}件** (※店舗で未取り扱い、または価格調査前の商品は「空欄」で表示されます)")
+                    
+                    # 8. 表として出力
+                    st.dataframe(
+                        comp_df[cols_to_show_t4],
+                        column_config=col_config_t4,
+                        hide_index=True,
+                        use_container_width=True
+                    )
                 else:
-                    st.info("両方の店舗に共通して登録されている商品がありません。")
+                    st.info(f"「{sel_cat_t4}」に該当するマスターデータがありません。")
+            else:
+                st.warning("異なる2つの店舗を選択してください。")
         else:
             st.info("比較するには2つ以上の販売店データが必要です。")
 

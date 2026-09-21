@@ -775,7 +775,7 @@ def master_manage_app():
                 st.error(f"ファイルの読み込みに失敗しました: {e}")
 
 # ---------------------------------------------
-# 画面③：商談向け分析ダッシュボード (★全アイテム・マスター照合版)
+# 画面③：商談向け分析ダッシュボード (★規格列の自動取得・完全対応版)
 # ---------------------------------------------
 def dashboard_app():
     st.title("📊 商談向け分析ダッシュボード")
@@ -813,7 +813,9 @@ def dashboard_app():
     price_df['比較用価格'] = price_df['現行売価(税抜)'].fillna(price_df.get('現行売価(税込)'))
     
     if not prod_df.empty and '商品ID' in price_df.columns:
-        merge_cols = ['商品ID', 'カテゴリー', 'メーカー名', '商品画像URL', '規格1', '規格2', '規格3']
+        # ★修正：「規格」という文字が含まれる列をすべて自動で拾い上げる
+        kikaku_cols_prod = [c for c in prod_df.columns if str(c).startswith('規格')]
+        merge_cols = ['商品ID', 'カテゴリー', 'メーカー名', '商品画像URL'] + kikaku_cols_prod
         merge_cols = [c for c in merge_cols if c in prod_df.columns]
         merged_df = pd.merge(price_df, prod_df[merge_cols], on='商品ID', how='left')
     else:
@@ -848,9 +850,9 @@ def dashboard_app():
                 
                 cols_to_show.extend(['販売店名', 'メーカー名', '商品名'])
                 
-                for spec in ['規格1', '規格2', '規格3']:
-                    if spec in disp_df.columns:
-                        cols_to_show.append(spec)
+                # ★修正：「規格」から始まる列を自動追加
+                kikaku_cols_disp = [c for c in disp_df.columns if str(c).startswith('規格')]
+                cols_to_show.extend(kikaku_cols_disp)
                         
                 if '現行売価(税抜)' in disp_df.columns:
                     cols_to_show.append('現行売価(税抜)')
@@ -899,7 +901,6 @@ def dashboard_app():
             except Exception:
                 st.info("マトリクスを生成するためのデータが不足しています。")
 
-    # ★ここからが完全リニューアルの「店舗間 ガチンコ比較（全マスター照合）」★
     with tab4:
         st.write("### ⚖️ 店舗間 ガチンコ比較（全アイテム一覧）")
         st.write("商品マスターに登録されている全商品を基準に、選択した2店舗の品揃えと価格を左右で一覧比較します。")
@@ -914,32 +915,25 @@ def dashboard_app():
             with col_b: store_B = st.selectbox("比較先 (店舗B)", stores, key="comp_B")
             
             if store_A and store_B and store_A != store_B:
-                # 1. マスターをベースにする
                 comp_df = prod_df.copy()
                 
-                # 2. 各店舗の価格データを抽出（重複登録対策として最後のデータを採用）
                 df_A = merged_df[merged_df['販売店名'] == store_A][['商品ID', '比較用価格']].rename(columns={'比較用価格': f'{store_A}の価格'})
                 df_B = merged_df[merged_df['販売店名'] == store_B][['商品ID', '比較用価格']].rename(columns={'比較用価格': f'{store_B}の価格'})
                 df_A = df_A.drop_duplicates(subset=['商品ID'], keep='last')
                 df_B = df_B.drop_duplicates(subset=['商品ID'], keep='last')
                 
-                # 3. マスターに店舗価格を結合（左結合）
                 comp_df = pd.merge(comp_df, df_A, on='商品ID', how='left')
                 comp_df = pd.merge(comp_df, df_B, on='商品ID', how='left')
                 
-                # 4. カテゴリーで絞り込み
                 if sel_cat_t4 != "すべてのカテゴリー":
                     comp_df = comp_df[comp_df['カテゴリー'] == sel_cat_t4]
                     
                 if not comp_df.empty:
-                    # 5. 価格差を計算
                     comp_df['価格差 (A - B)'] = comp_df[f'{store_A}の価格'] - comp_df[f'{store_B}の価格']
                     
-                    # 6. 並べ替え (メーカー > 商品名)
                     sort_cols = [c for c in ['メーカー名', '商品名'] if c in comp_df.columns]
                     comp_df = comp_df.sort_values(sort_cols)
                     
-                    # 7. 表示カラムの設定
                     cols_to_show_t4 = []
                     col_config_t4 = {}
                     
@@ -950,7 +944,11 @@ def dashboard_app():
                     if sel_cat_t4 == "すべてのカテゴリー" and 'カテゴリー' in comp_df.columns:
                         cols_to_show_t4.append('カテゴリー')
                         
-                    cols_to_show_t4.extend([c for c in ['メーカー名', '商品名', '規格1', '規格2', '規格3'] if c in comp_df.columns])
+                    cols_to_show_t4.extend([c for c in ['メーカー名', '商品名'] if c in comp_df.columns])
+                    
+                    # ★修正：「規格」から始まる列をすべて自動追加
+                    kikaku_cols_t4 = [c for c in comp_df.columns if str(c).startswith('規格')]
+                    cols_to_show_t4.extend(kikaku_cols_t4)
                     
                     cols_to_show_t4.append(f'{store_A}の価格')
                     col_config_t4[f'{store_A}の価格'] = st.column_config.NumberColumn(f"{store_A}", format="%d円")
@@ -963,7 +961,6 @@ def dashboard_app():
                     
                     st.success(f"**マスター照合結果: {len(comp_df)}件** (※店舗で未取り扱い、または価格調査前の商品は「空欄」で表示されます)")
                     
-                    # 8. 表として出力
                     st.dataframe(
                         comp_df[cols_to_show_t4],
                         column_config=col_config_t4,

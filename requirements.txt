@@ -6,4 +6,3 @@ oauth2client
 requests
 Pillow
 duckduckgo-search
-rembg

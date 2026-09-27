@@ -12,9 +12,8 @@ from datetime import datetime
 import os
 import difflib
 
-# ★新規追加した専門AIツール
+# 画像検索用ツール（背景切り抜きはサーバー負荷のため一時除外）
 from duckduckgo_search import DDGS
-from rembg import remove
 
 Image.MAX_IMAGE_PIXELS = None 
 
@@ -48,12 +47,7 @@ def optimize_image_in_memory(uploaded_file):
 def save_compressed_image(optimized_image, product_id):
     try:
         img_byte_arr = io.BytesIO()
-        # ★背景透過画像(RGBA)の場合はPNGとして保存し、背景が黒くなるのを防ぐ
-        if optimized_image.mode in ('RGBA', 'LA') or (optimized_image.mode == 'P' and 'transparency' in optimized_image.info):
-            optimized_image.save(img_byte_arr, format='PNG')
-        else:
-            optimized_image.save(img_byte_arr, format='JPEG', quality=70)
-            
+        optimized_image.save(img_byte_arr, format='JPEG', quality=70)
         img_byte_arr.seek(0)
         encoded_image = base64.b64encode(img_byte_arr.read()).decode('utf-8')
         
@@ -329,7 +323,6 @@ def price_check_app():
                         st.number_input("💰 売価", value=ai_price, step=1, key=f"price_{i}")
                         st.selectbox("🧾 税区分", ["税別", "税込"], index=0 if ai_tax == '税別' else 1, key=f"tax_{i}")
                         
-                        # ★ 新規登録ボタン
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("➕ これ以外の為、商品マスターに登録", key=f"new_master_{i}", type="secondary"):
                             st.session_state['new_prod_init_name'] = ai_name
@@ -439,7 +432,6 @@ def price_check_app():
         with st.container(border=True):
             st.info(f"自動割り当てID: **{next_id}**")
             
-            # ★ AI画像解析から引き継いだ初期値
             init_name = st.session_state.get('new_prod_init_name', '')
             init_price = st.session_state.get('new_prod_init_price', 0)
             init_tax = st.session_state.get('new_prod_init_tax', '税別')
@@ -468,22 +460,22 @@ def price_check_app():
                         st.error("検索エラー。少し時間をおいて再度お試しください。")
             
             if 'f_web_res' in st.session_state and st.session_state['f_web_res']:
-                st.write("候補画像 (クリックで背景を削除して選択):")
+                st.write("候補画像 (クリックで選択):")
                 cols = st.columns(3)
                 for i, res in enumerate(st.session_state['f_web_res']):
                     with cols[i]:
                         st.image(res['image'], use_container_width=True)
                         if st.button("👆 これを選択", key=f"f_sel_{i}"):
-                            with st.spinner("AIが背景を切り抜き中... (数秒かかります)"):
+                            with st.spinner("画像を取得中..."):
                                 try:
                                     img_resp = requests.get(res['image'], timeout=10)
-                                    st.session_state['f_final_img'] = remove(img_resp.content)
-                                    st.success("トリミング完了！")
+                                    st.session_state['f_final_img'] = img_resp.content
+                                    st.success("画像を取得しました！")
                                 except Exception:
-                                    st.error("処理に失敗しました。")
+                                    st.error("画像の取得に失敗しました。")
             
             if 'f_final_img' in st.session_state:
-                st.image(st.session_state['f_final_img'], caption="✓ 登録予定の画像 (背景透過)", width=200)
+                st.image(st.session_state['f_final_img'], caption="✓ 登録予定の画像", width=200)
                 
             st.write("▼ または手動で画像をアップロード")
             new_img_file = st.file_uploader("手元の画像をアップロード", type=["jpg", "jpeg", "png"])
@@ -497,8 +489,9 @@ def price_check_app():
                             optimized = optimize_image_in_memory(new_img_file)
                             img_path = save_compressed_image(optimized, next_id)
                         elif 'f_final_img' in st.session_state:
-                            pil_img = Image.open(io.BytesIO(st.session_state['f_final_img'])).convert("RGBA")
-                            img_path = save_compressed_image(pil_img, next_id)
+                            pil_img = Image.open(io.BytesIO(st.session_state['f_final_img']))
+                            optimized = optimize_image_in_memory(pil_img)
+                            img_path = save_compressed_image(optimized, next_id)
                             
                         prod_sheet.append_row([next_id, selected_cat, new_name, new_maker, new_spec1, new_spec2, new_spec3, new_origin, img_path])
                         
@@ -518,7 +511,7 @@ def price_check_app():
                         st.rerun()
 
 # ---------------------------------------------
-# 画面②：商品マスター管理 (★新規登録にWeb検索機能を追加)
+# 画面②：商品マスター管理
 # ---------------------------------------------
 def master_manage_app():
     st.title("📦 商品マスター管理")
@@ -568,16 +561,16 @@ def master_manage_app():
                     with cols[i]:
                         st.image(res['image'], use_container_width=True)
                         if st.button("👆 これを選択", key=f"m_sel_{i}"):
-                            with st.spinner("AIが背景を切り抜き中..."):
+                            with st.spinner("画像を取得中..."):
                                 try:
                                     img_resp = requests.get(res['image'], timeout=10)
-                                    st.session_state['m_final_img'] = remove(img_resp.content)
-                                    st.success("トリミング完了！")
+                                    st.session_state['m_final_img'] = img_resp.content
+                                    st.success("画像を取得しました！")
                                 except Exception:
-                                    st.error("処理に失敗しました。")
+                                    st.error("画像の取得に失敗しました。")
             
             if 'm_final_img' in st.session_state:
-                st.image(st.session_state['m_final_img'], caption="✓ 登録予定の画像 (背景透過)", width=200)
+                st.image(st.session_state['m_final_img'], caption="✓ 登録予定の画像", width=200)
                 
             st.write("▼ または手動で画像をアップロード")
             new_img_file = st.file_uploader("手元の画像をアップロード", type=["jpg", "jpeg", "png"], key="m_up")
@@ -591,8 +584,9 @@ def master_manage_app():
                             optimized = optimize_image_in_memory(new_img_file)
                             img_path = save_compressed_image(optimized, next_id)
                         elif 'm_final_img' in st.session_state:
-                            pil_img = Image.open(io.BytesIO(st.session_state['m_final_img'])).convert("RGBA")
-                            img_path = save_compressed_image(pil_img, next_id)
+                            pil_img = Image.open(io.BytesIO(st.session_state['m_final_img']))
+                            optimized = optimize_image_in_memory(pil_img)
+                            img_path = save_compressed_image(optimized, next_id)
                             
                         prod_sheet.append_row([next_id, selected_cat, new_name, new_maker, new_spec1, new_spec2, new_spec3, new_origin, img_path])
                         st.success(f"【{new_name}】を登録しました！")
@@ -600,7 +594,6 @@ def master_manage_app():
                         if 'm_final_img' in st.session_state: del st.session_state['m_final_img']
                         st.rerun()
 
-    # タブ2(編集)とタブ3(CSV一括)は省略せずそのまま
     with tab2:
         st.write("### 登録済みマスターの情報を編集します")
         if not prod_data: st.warning("登録されている商品がありません。")

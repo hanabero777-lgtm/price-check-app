@@ -271,8 +271,10 @@ def price_check_app():
             
         st.info(f"🏢 **対象店舗:** {st.session_state.selected_store_val}")
         uploaded_file = st.file_uploader("棚の画像を撮影 / 選択", type=["jpg", "jpeg", "png"])
+        
         if uploaded_file is not None:
             image = optimize_image_in_memory(uploaded_file)
+            st.session_state['uploaded_image'] = image # ★元画像をセッションに保存して登録画面で使えるようにする
             st.image(image, caption="アップロード画像", use_container_width=True)
 
             if st.button("🤖 AIで商品を解析する"):
@@ -299,13 +301,15 @@ def price_check_app():
                 with st.container(border=True):
                     st.markdown(f"### 🔍 AI読取: `{ai_name}`")
                     if candidates:
-                        cand_cols = st.columns(min(len(candidates), 3))
+                        cand_cols = st.columns(3) # ★必ず3つ一列の枠を作る
                         for c_idx, cand_key in enumerate(candidates[:3]):
                             with cand_cols[c_idx]:
                                 cand_img = PROD_MASTER[cand_key].get('商品画像URL', '')
                                 if cand_img and cand_img.startswith("http"): st.image(cand_img, use_container_width=True)
                                 else: st.info("画像なし")
-                                if st.button("👆 これを選択", key=f"btn_{i}_{c_idx}"):
+                                
+                                st.caption(PROD_MASTER[cand_key].get('商品名', '不明')) # ★商品名も小さく表示
+                                if st.button("👆 選択", key=f"btn_{i}_{c_idx}", use_container_width=True):
                                     st.session_state[state_key] = cand_key; st.rerun()
                     
                     st.markdown("---")
@@ -414,6 +418,12 @@ def price_check_app():
             st.rerun()
             
         st.write("### ✨ 新しい商品をマスターに登録")
+        
+        # ★ AI読取から来た場合、元画像を上に表示して見ながら入力できるようにする
+        if st.session_state.get('return_to_image_mode') and 'uploaded_image' in st.session_state:
+            with st.expander("📸 撮影した元画像を確認する（見ながら入力できます）", expanded=True):
+                st.image(st.session_state['uploaded_image'], use_container_width=True)
+                
         CAT_MASTER = load_category_master()
         cat_list = list(CAT_MASTER.keys()) if CAT_MASTER else ["(カテゴリーなし)"]
         
@@ -461,11 +471,11 @@ def price_check_app():
             
             if 'f_web_res' in st.session_state and st.session_state['f_web_res']:
                 st.write("候補画像 (クリックで選択):")
-                cols = st.columns(3)
-                for i, res in enumerate(st.session_state['f_web_res']):
+                cols = st.columns(3) # ★ここも必ず3つ一列の枠を作る
+                for i, res in enumerate(st.session_state['f_web_res'][:3]):
                     with cols[i]:
                         st.image(res['image'], use_container_width=True)
-                        if st.button("👆 これを選択", key=f"f_sel_{i}"):
+                        if st.button("👆 選択", key=f"f_sel_{i}", use_container_width=True):
                             with st.spinner("画像を取得中..."):
                                 try:
                                     img_resp = requests.get(res['image'], timeout=10)
@@ -556,11 +566,11 @@ def master_manage_app():
                         st.error("検索エラー。")
             
             if 'm_web_res' in st.session_state and st.session_state['m_web_res']:
-                cols = st.columns(3)
-                for i, res in enumerate(st.session_state['m_web_res']):
+                cols = st.columns(3) # ★ここも必ず3つ一列の枠を作る
+                for i, res in enumerate(st.session_state['m_web_res'][:3]):
                     with cols[i]:
                         st.image(res['image'], use_container_width=True)
-                        if st.button("👆 これを選択", key=f"m_sel_{i}"):
+                        if st.button("👆 選択", key=f"m_sel_{i}", use_container_width=True):
                             with st.spinner("画像を取得中..."):
                                 try:
                                     img_resp = requests.get(res['image'], timeout=10)

@@ -1,7 +1,9 @@
 streamlit
 google-generativeai
 pandas
-Pillow
 gspread
 oauth2client
 requests
+Pillow
+duckduckgo-search
+rembg
